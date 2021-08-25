@@ -31,6 +31,9 @@ class Equations:
         if isinstance(x, dict):
             x = pd.concat(x, axis=1, names=["equation", "regressor"])
 
+        if isinstance(x, pd.Series):
+            x = pd.concat([x] * y.shape[1], keys=y.columns, axis=1)
+
         if x.columns.nlevels < 2:
             x = pd.concat([x], keys=["regressor"], axis=1).swaplevel(axis=1)
 
@@ -117,10 +120,10 @@ class Equations:
 
         Returns
         -------
-        None
+        Equations
 
         """
-        self.insert_into_x(const=pd.Series(1, index=self.x.index))
+        return self.insert_into_x(const=pd.Series(1, index=self.x.index))
 
     def insert_into_x(self, **regressors):
         """Append new variables to each set of regressors.
@@ -138,17 +141,16 @@ class Equations:
             if isinstance(x_, pd.Series):
                 x_df = pd.concat([x_] * len(self.equations), axis=1,
                                  keys=self.equations)
-                self.insert_into_x(**{x_name: x_df})
+                return self.insert_into_x(**{x_name: x_df})
 
             elif isinstance(x_, pd.DataFrame):
                 x_df = pd.concat([x_, ], axis=1, keys=[x_name, ])\
                     .swaplevel(axis=1)
-                self.x = self.x.join(x_df, how="left").sort_index(axis=1)
+                x_new = self.x.join(x_df, how="left").sort_index(axis=1)
+                return Equations(self.y, x_new, self.weight)
 
             else:
                 raise NotImplementedError
-
-        return
 
     def __iter__(self):
         """
@@ -207,7 +209,7 @@ class Equations:
         Parameters
         ----------
         dropna : bool
-            similar to `pandas.DataFrame.dropna`
+            similar to `pandas.DataFrame.stack(*, dropna)`
 
         Returns
         -------
@@ -226,7 +228,7 @@ class Equations:
 
         if self.weight is not None:
             w = self.weight.reindex(index=x.index, level=0).values
-            w = w / w[-1]
+            # w = w / w[-1]
         else:
             w = None
 
@@ -324,22 +326,34 @@ class Equations:
 
         """
         if loc is not None:
-            ratio = self.y.index.get_loc(loc, method="ffill") / len(self.y)
-            return self.split(ratio=ratio, loc=None)
+            y_new_train = self.y.loc[:loc]
+            x_new_train = self.x.loc[:loc]
+            w_new_train = (self.weight.loc[:loc] if self.weight is not None
+                           else None)
+            y_new_test = self.y.loc[loc:]
+            x_new_test = self.x.loc[loc:]
+            w_new_test = (self.weight.loc[loc:] if self.weight is not None
+                          else None)
 
-        if ratio < 0:
-            return self.split(1 + ratio)[::-1]
+        else:
+            if ratio < 0:
+                return self.split(1 + ratio)[::-1]
 
-        # determine split location
-        idx = int(np.ceil(len(self.y) * ratio))
+            # determine split location
+            idx = int(np.ceil(len(self.y) * ratio))
+
+            y_new_train = self.y.iloc[:idx]
+            x_new_train = self.x.iloc[:idx]
+            w_new_train = (self.weight.iloc[:idx] if self.weight is not None
+                           else None)
+            y_new_test = self.y.iloc[idx:]
+            x_new_test = self.x.iloc[idx:]
+            w_new_test = (self.weight.iloc[idx:] if self.weight is not None
+                          else None)
 
         res = (
-            Equations(self.y.iloc[:idx], self.x.iloc[:idx],
-                      weight=(self.weight.iloc[:idx]
-                              if self.weight is not None else None)),
-            Equations(self.y.iloc[idx:], self.x.iloc[idx:],
-                      weight=(self.weight.iloc[idx:]
-                              if self.weight is not None else None))
+            Equations(y_new_train, x_new_train, weight=w_new_train),
+            Equations(y_new_test, x_new_test, weight=w_new_test)
         )
 
         return res
@@ -427,7 +441,8 @@ class Equations:
 
         Returns
         -------
-        model
+        Union[lm.panel.model._LSSystemModelBase,
+              lm.panel.model._PanelModelBase]
 
         """
         assert callable(estimator)
@@ -444,7 +459,12 @@ class Equations:
 
             equations = OrderedDict()
             for eq in self.equations:
-                equations[eq] = {"dependent": y_[eq], "exog": x_[eq]}
+                equations[eq] = {
+                    "dependent": y_[eq],
+                    "exog": x_[eq]
+                }
+                if self.weight is not None:
+                    equations[eq]["weights"] = self.weight.loc[y_[eq].index]
 
             model = estimator(equations=equations, **kwargs)
 
@@ -455,7 +475,12 @@ class Equations:
                 y.name = "y"
             x = self.x.stack(level=0, dropna=False).swaplevel(axis=0)
 
-            model = estimator(dependent=y, exog=x, **kwargs)
+            if self.weight is not None:
+                w = self.weight.reindex(x.index, level=1)
+            else:
+                w = None
+
+            model = estimator(dependent=y, exog=x, weights=w, **kwargs)
 
         else:
             raise NotImplementedError
@@ -589,3 +614,12 @@ class Equations:
         # fx = pd.get_dummies(fx_ser)
 
         return fx_ser
+
+    def ols(self):
+        """
+
+        Returns
+        -------
+
+        """
+        pass

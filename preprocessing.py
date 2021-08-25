@@ -3,7 +3,7 @@ import numpy as np
 from sklearn import preprocessing as pp
 from sklearn.base import TransformerMixin
 
-from findata.equations import Equations
+from .equations import Equations
 
 
 class EquationsScaler:
