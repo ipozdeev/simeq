@@ -63,6 +63,7 @@ class Equations:
 
         # align on the index axis -------------------------------------------
         y_aln, x_aln = y_orig.align(x_orig, axis=0, join="inner")
+        x_aln = x_aln.reindex(columns=y_aln.columns, level=0)
 
         # sort indices to ease conversion to numpy later
         y_aln = y_aln.sort_index(axis=1)

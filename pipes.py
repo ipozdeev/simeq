@@ -92,20 +92,20 @@ class CarryDataset(Dataset):
     pfsort : pandas.DataFrame
         of dim T x (NM) where M is the number of portfolios
     rx : pandas.DataFrame
-        forward-looking rx, of maturity `lookfwd`
+        forward-looking rx, of maturity `lookforward`
     rs : pandas.DataFrame
         forward-looking rs, daily
     exog
-    lookfwd : int
+    lookforward : int
         investment horizon, in units of frequency of the index
     lookback : int
     """
-    def __init__(self, pfsort, rx, rs, exog, lookfwd, lookback=1):
+    def __init__(self, pfsort, rx, rs, exog, lookforward, lookback=1):
         self.pfsort = pfsort
         self.rx = rx
         self.rs = rs
         self.exog = exog
-        self.lookfwd = lookfwd
+        self.lookforward = lookforward
         self.lookback = lookback
 
     def __len__(self):
@@ -113,17 +113,17 @@ class CarryDataset(Dataset):
 
     def __getitem__(self, item):
         if (item < self.lookback) | \
-                (item > len(self) - self.lookfwd):
+                (item > len(self) - self.lookforward):
             return self.__getitem__(
                 np.random.randint(self.lookback,
-                                  len(self) - self.lookfwd)
+                                  len(self) - self.lookforward)
             )
         x_ = self.exog.iloc[:(item+1)].tail(self.lookback)\
             .values.reshape(1, -1)
 
         # sorted stuff
         w_ = self.pfsort.iloc[item]
-        rs_ = self.rs.iloc[item:].head(self.lookfwd) \
+        rs_ = self.rs.iloc[item:].head(self.lookforward) \
             .mul(w_, axis=1).sum(axis=1, level=0) \
             .values
         rx_ = self.rx.iloc[[item]] \
@@ -131,24 +131,6 @@ class CarryDataset(Dataset):
             .values
 
         return x_, rs_, rx_
-
-
-class TermStructureDataSet(Dataset):
-    """Term structure for CNN, with transformations."""
-    def __init__(self, ts, lookback):
-        self.ts = ts
-        self.lookback = lookback
-
-    def __len__(self):
-        return len(self.ts) - self.lookback + 1
-
-    @to_values
-    def __getitem__(self, item) -> tuple:
-        x = self.ts.iloc[:(item+self.lookback)].tail(self.lookback)
-        x = x.sub(x.groupby(axis=1, level=0).apply(lambda z_: z_.iloc[-1, 0]),
-                  axis=1, level=0)
-
-        return (x, )
 
 
 class TermStructureGranularDataSet(Dataset):
@@ -186,25 +168,25 @@ class ExcessReturnsDataset(Dataset):
     ----------
     rx : DataFrame
     rs : DataFrame
-    lookfwd : int
+    lookforward : int
     """
 
-    def __init__(self, rx: pd.DataFrame, rs: pd.DataFrame, lookfwd: int):
+    def __init__(self, rx: pd.DataFrame, rs: pd.DataFrame, lookforward: int):
 
         if not all([rx.index.equals(rs.index), rx.columns.equals(rs.columns)]):
             raise ValueError("`rx` and `rs` are not aligned.")
 
         self.rx = rx
         self.rs = rs
-        self.lookfwd = lookfwd
+        self.lookforward = lookforward
 
     def __len__(self):
-        return len(self.rx) - self.lookfwd + 1
+        return len(self.rx) - self.lookforward + 1
 
     @to_values
     def __getitem__(self, item):
         rx_ = self.rx.iloc[[item]]
-        rs_ = self.rs.iloc[item:].head(self.lookfwd)
+        rs_ = self.rs.iloc[item:].head(self.lookforward)
 
         return rx_, rs_
 
@@ -216,13 +198,69 @@ class BackwardForwardDataset(Dataset):
         self.forward_ds = forward_ds
 
     def __len__(self):
-        return len(self.backward_ds) - self.forward_ds.lookfwd
+        return len(self.backward_ds) - self.forward_ds.lookforward
 
     def __getitem__(self, item) -> tuple:
         res = (*self.backward_ds.__getitem__(item),
                *self.forward_ds.__getitem__(item+self.backward_ds.lookback-1))
 
         return res
+
+
+class BackwardDataset(Dataset):
+
+    def __init__(self, ds: pd.DataFrame, lookback: int):
+
+        self.ds = ds
+        self.lookback = lookback
+
+    def __len__(self):
+        return len(self.ds) - self.lookback + 1
+
+    @to_values
+    def __getitem__(self, item) -> tuple:
+        x = self.ds.iloc[:(item + self.lookback)].tail(self.lookback)
+        # x = x.sub(x.groupby(axis=1, level=0).apply(lambda z_: z_.iloc[-1, 0]),
+        #           axis=1, level=0)
+
+        return (x,)
+
+
+class TermStructureDataSet(BackwardDataset):
+    """Term structure for CNN, with transformations."""
+    def __init__(self, ds, lookback: int, transform: callable = None):
+        if transform is None:
+            transform = lambda x: x
+
+        super(TermStructureDataSet, self).__init__(ds, lookback)
+
+        self.transform = transform
+
+    @to_values
+    def __getitem__(self, item) -> tuple:
+        x = self.ds.iloc[:(item + self.lookback)].tail(self.lookback)\
+            .pipe(self.transform)
+        # x = x.sub(x.groupby(axis=1, level=0).apply(lambda z_: z_.iloc[-1, 0]),
+        #           axis=1, level=0)
+
+        return (x, )
+
+
+class ForwardDataset(Dataset):
+
+    def __init__(self, ds: pd.DataFrame, lookforward: int):
+
+        self.ds = ds
+        self.lookforward = lookforward
+
+    def __len__(self):
+        return len(self.ds) - self.lookforward + 1
+
+    @to_values
+    def __getitem__(self, item) -> tuple:
+        x = self.ds.iloc[item:].head(self.lookforward)
+
+        return (x, )
 
 
 if __name__ == '__main__':
